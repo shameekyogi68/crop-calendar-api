@@ -95,17 +95,18 @@ async def fetch_calendar_data(season: str, crop: str, variety: str):
         conn = db.get_connection()
         cursor = conn.cursor()
         
-        # Efficient Index-Based Lookup
+        # Efficient Index-Based Lookup with Fuzzy Variety Matching
         query = """
             SELECT month, week_1, week_2, week_3, week_4 
             FROM crop_calendar 
             WHERE LOWER(season) = LOWER(?) 
               AND LOWER(crop) = LOWER(?) 
-              AND LOWER(variety) = LOWER(?)
+              AND LOWER(variety) LIKE LOWER(?)
             ORDER BY id ASC
         """
         
-        results = cursor.execute(query, (season, crop, variety)).fetchall()
+        # Use %wildcards% for the variety to allow partial matches like "MO-4" -> "MO-4 (Bhadra)"
+        results = cursor.execute(query, (season, crop, f"%{variety}%")).fetchall()
         conn.close()
 
         if not results:
