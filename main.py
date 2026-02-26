@@ -76,7 +76,14 @@ app.add_middleware(
 
 @app.get("/", tags=["Status"])
 async def root():
-    return {"status": "healthy", "service": "Udupi Crop Calendar API"}
+    conn = db.get_connection()
+    count = conn.execute("SELECT COUNT(*) FROM crop_calendar").fetchone()[0]
+    conn.close()
+    return {
+        "status": "healthy", 
+        "service": "Udupi Crop Calendar API",
+        "database_rows": count
+    }
 
 @app.get("/calendar", response_model=APIResponse, tags=["Calendar"])
 async def get_calendar(
@@ -91,6 +98,7 @@ async def post_calendar(request: CalendarRequest):
     return await fetch_calendar_data(request.season, request.crop, request.variety)
 
 async def fetch_calendar_data(season: str, crop: str, variety: str):
+    logger.info(f"Searching for: Season={season}, Crop={crop}, Variety={variety}")
     try:
         conn = db.get_connection()
         cursor = conn.cursor()
@@ -105,12 +113,14 @@ async def fetch_calendar_data(season: str, crop: str, variety: str):
             ORDER BY id ASC
         """
         
-        # Use %wildcards% for the variety to allow partial matches like "MO-4" -> "MO-4 (Bhadra)"
-        results = cursor.execute(query, (season, crop, f"%{variety}%")).fetchall()
+        variety_query = f"%{variety}%"
+        logger.info(f"Executing query: {query} with params ({season}, {crop}, {variety_query})")
+        
+        results = cursor.execute(query, (season, crop, variety_query)).fetchall()
         conn.close()
 
         if not results:
-            logger.warning(f"No results found for: {season}/{crop}/{variety}")
+            logger.warning(f"No results found in DB for params: {season}/{crop}/{variety}")
             raise HTTPException(
                 status_code=404, 
                 detail=f"Calendar not found. Verify season, crop, and variety spelling."
