@@ -21,6 +21,7 @@ class CalendarRequest(BaseModel):
     season: str
     crop: str
     variety: str
+    language: str = "en"
 
 class CalendarEntry(BaseModel):
     month: str
@@ -37,68 +38,55 @@ class APIResponse(BaseModel):
 class Database:
     def __init__(self, db_path: str):
         self.db_path = db_path
-        self._pool = None
 
     async def get_conn(self):
         conn = await aiosqlite.connect(self.db_path)
         conn.row_factory = aiosqlite.Row
-        # Performance Tuning: Enable WAL and faster sync
+        # Performance Tuning
         await conn.execute("PRAGMA journal_mode=WAL")
         await conn.execute("PRAGMA synchronous=NORMAL")
-        await conn.execute("PRAGMA cache_size=-64000") # 64MB Cache
         return conn
 
 db = Database(DB_PATH)
-
-# In-Memory Cache for Static Data (Static values don't change often)
-# Using a simple dict-based cache for async compatibility if needed, 
-# or just wrapping the logic.
 _cache = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("⚡ High-Performance Mode Starting...")
+    logger.info("⚡ High-Performance Bilingual Mode Starting...")
     if not os.path.exists(DB_PATH):
-        logger.error(f"FATAL: {DB_PATH} missing. Run migrate.py first.")
-    else:
-        # Pre-verify and prime the engine
-        conn = await db.get_conn()
-        async with conn.execute("SELECT COUNT(*) FROM crop_calendar") as cursor:
-            row = await cursor.fetchone()
-            logger.info(f"Database Optimized & Live. Entries: {row[0]}")
-        await conn.close()
+        logger.error(f"FATAL: {DB_PATH} missing.")
     yield
-    logger.info("Shutting down API...")
 
 app = FastAPI(
-    title="Udupi Crop Calendar HIGH-PERFORMANCE",
+    title="Udupi Crop Calendar BILINGUAL API",
     default_response_class=ORJSONResponse,
     lifespan=lifespan
 )
 
 # Middleware Stack
-app.add_middleware(GZipMiddleware, minimum_size=1000) # Compresses large responses
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/", tags=["Status"])
 async def root():
-    return {"status": "optimised", "engine": "FastAPI + aiosqlite + orjson"}
+    return {"status": "optimised", "engine": "FastAPI + aiosqlite (Bilingual)"}
 
 @app.get("/calendar", response_model=APIResponse, tags=["Calendar"])
 async def get_calendar(
     season: str = Query(..., description="E.g., Kharif, Rabi"),
     crop: str = Query(..., description="E.g., Paddy"),
-    variety: str = Query(..., description="E.g., MO-4")
+    variety: str = Query(..., description="E.g., MO-4"),
+    language: str = Query("en", description="en or kn")
 ):
-    return await fetch_calendar_data(season, crop, variety)
+    return await fetch_calendar_data(season, crop, variety, language)
 
 @app.post("/calendar", response_model=APIResponse, tags=["Calendar"])
 async def post_calendar(request: CalendarRequest):
-    return await fetch_calendar_data(request.season, request.crop, request.variety)
+    return await fetch_calendar_data(request.season, request.crop, request.variety, request.language)
 
-async def fetch_calendar_data(season: str, crop: str, variety: str):
-    # Check In-Memory Cache first (Sub-millisecond)
-    cache_key = f"{season.lower()}:{crop.lower()}:{variety.lower()}"
+async def fetch_calendar_data(season: str, crop: str, variety: str, language: str = "en"):
+    # Cache key includes language
+    cache_key = f"{language}:{season.lower()}:{crop.lower()}:{variety.lower()}"
     if cache_key in _cache:
         logger.info(f"🚀 Cache Hit: {cache_key}")
         return _cache[cache_key]
@@ -107,8 +95,14 @@ async def fetch_calendar_data(season: str, crop: str, variety: str):
         conn = await db.get_conn()
         variety_query = f"%{variety}%"
         
-        query = """
-            SELECT month, week_1, week_2, week_3, week_4 
+        # Decide which columns to fetch based on language
+        suffix = "_kn" if language.lower() == "kn" else ""
+        query = f"""
+            SELECT month, 
+                   week_1{suffix} as week_1, 
+                   week_2{suffix} as week_2, 
+                   week_3{suffix} as week_3, 
+                   week_4{suffix} as week_4 
             FROM crop_calendar 
             WHERE LOWER(season) = LOWER(?) 
               AND LOWER(crop) = LOWER(?) 
@@ -126,14 +120,24 @@ async def fetch_calendar_data(season: str, crop: str, variety: str):
         calendar_list = [CalendarEntry(**dict(row)) for row in rows]
         
         response = APIResponse(
-            metadata={"season": season, "crop": crop, "variety": variety, "count": len(calendar_list)},
+            metadata={
+                "season": season, 
+                "crop": crop, 
+                "variety": variety, 
+                "language": language,
+                "count": len(calendar_list)
+            },
             calendar=calendar_list
         )
 
-        # Update Cache
         _cache[cache_key] = response
         logger.info(f"💾 Cache Seeded: {cache_key}")
         return response
+
+    except Exception as e:
+        if isinstance(e, HTTPException): raise e
+        logger.error(f"Server Error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal performance failure")
 
     except Exception as e:
         if isinstance(e, HTTPException): raise e
