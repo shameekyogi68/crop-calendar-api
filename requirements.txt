@@ -1,3 +1,5 @@
 fastapi
-uvicorn
+uvicorn[standard]
+aiosqlite
+orjson
 python-multipart
