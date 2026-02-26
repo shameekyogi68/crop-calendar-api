@@ -17,6 +17,11 @@ logger = logging.getLogger("CropCalendarAPI")
 DB_PATH = "calendar.db"
 
 # Pydantic Schema Models
+class CalendarRequest(BaseModel):
+    season: str
+    crop: str
+    variety: str
+
 class CalendarEntry(BaseModel):
     month: str
     week_1: str
@@ -79,12 +84,18 @@ async def get_calendar(
     crop: str = Query(..., description="E.g., Paddy, Groundnut"),
     variety: str = Query(..., description="E.g., MO-4, TMV-2")
 ):
+    return await fetch_calendar_data(season, crop, variety)
+
+@app.post("/calendar", response_model=APIResponse, tags=["Calendar"])
+async def post_calendar(request: CalendarRequest):
+    return await fetch_calendar_data(request.season, request.crop, request.variety)
+
+async def fetch_calendar_data(season: str, crop: str, variety: str):
     try:
         conn = db.get_connection()
         cursor = conn.cursor()
         
         # Efficient Index-Based Lookup
-        # Note: Using case-insensitive matching for better UX
         query = """
             SELECT month, week_1, week_2, week_3, week_4 
             FROM crop_calendar 
@@ -101,10 +112,9 @@ async def get_calendar(
             logger.warning(f"No results found for: {season}/{crop}/{variety}")
             raise HTTPException(
                 status_code=404, 
-                detail=f"Calendar not found. Verify season, crop, and variety spelling for Udupi region."
+                detail=f"Calendar not found. Verify season, crop, and variety spelling."
             )
 
-        # Map to Pydantic models for type safety
         calendar_list = [
             CalendarEntry(
                 month=row["month"],
